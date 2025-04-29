@@ -1,17 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -30,15 +26,27 @@ const (
 	statusInfoInterval = 5 * time.Second
 
 	binary = "./alertmanager"
-	// alertsEndpoint = "http://127.0.0.1:19093/api/v2/alerts"
 )
 
 var (
 	log            *logging.L
 	retryIntervals = httpc.Intervals{100 * time.Millisecond, 500 * time.Millisecond, time.Second}
+
+	// PROD:
+	// --config.file=/etc/alertmanager/config_out/alertmanager.env.yaml --storage.path=/alertmanager --data.retention=2160h
+	// --cluster.listen-address=[10.32.16.96]:9094 --web.listen-address=:9093 --web.external-url=https://alertmgr.osdp.open.ch
+	// --web.route-prefix=/ --cluster.pushpull-interval=5s --cluster.peer=alertmanager-osdp-monitoring-alertmanager-0.alertmanager-operated:9094
+	// --cluster.peer=alertmanager-osdp-monitoring-alertmanager-1.alertmanager-operated:9094 --cluster.peer=alertmanager-osdp-monitoring-alertmanager-2.alertmanager-operated:9094
+	// --cluster.reconnect-timeout=5m --web.config.file=/etc/alertmanager/web_config/web-config.yaml
+	baseAMArgs = []string{
+		"--data.retention=1h",
+		"--web.route-prefix=/",
+		"--cluster.pushpull-interval=5s",
+		"--cluster.reconnect-timeout=15s",
+	}
 )
 
-func TestXxx(t *testing.T) {
+func TestAlertSequence(t *testing.T) {
 
 	log.Infof("Starting %d Alertmanager instances, waiting for gossip to settle...", nInstances)
 
@@ -52,7 +60,7 @@ func TestXxx(t *testing.T) {
 
 	ams := make(AMInstances, nInstances)
 	for i := range nInstances {
-		ams[i] = NewAMInstance(getArgs(tempDir, nInstances, i))
+		ams[i] = NewAMInstance(constructArgs(tempDir, nInstances, i))
 	}
 
 	err := ams.Start()
@@ -131,139 +139,6 @@ func TestXxx(t *testing.T) {
 	}
 }
 
-type AMInstances []*AMInstance
-
-func (a AMInstances) Start() error {
-	for _, instance := range a {
-		if err := instance.Start(); err != nil {
-			return fmt.Errorf("failed to start instance: %w", err)
-		}
-	}
-	return nil
-}
-
-func (a AMInstances) Stop() error {
-	for _, instance := range a {
-		if err := instance.Stop(); err != nil {
-			return fmt.Errorf("failed to stop instance: %w", err)
-		}
-	}
-	return nil
-}
-
-func (a AMInstances) Health() error {
-	for _, instance := range a {
-		if err := instance.Health(); err != nil {
-			return fmt.Errorf("failed to get health: %w", err)
-		}
-	}
-	return nil
-}
-
-func (a AMInstances) GossipSettled() bool {
-	for _, instance := range a {
-		if !instance.GossipSettled() {
-			return false
-		}
-	}
-	return true
-}
-
-func (a AMInstances) Ready() error {
-	for _, instance := range a {
-		if err := instance.Ready(); err != nil {
-			return fmt.Errorf("failed to get ready state: %w", err)
-		}
-	}
-	return nil
-}
-
-type AMInstance struct {
-	Endpoint string
-	Args     []string
-
-	cmd *exec.Cmd
-	out *bytes.Buffer
-}
-
-func NewAMInstance(endpoint string, args []string) *AMInstance {
-	return &AMInstance{
-		Endpoint: endpoint,
-		Args:     args,
-		out:      bytes.NewBuffer(nil),
-	}
-}
-
-func (a *AMInstance) Start() error {
-	a.cmd = exec.Command(binary, a.Args...)
-	a.cmd.Stdout = a.out
-	a.cmd.Stderr = a.out
-
-	if err := a.cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start command: %w\n%v", err, a.out.String())
-	}
-
-	return nil
-}
-
-func (a *AMInstance) Stop() error {
-	if err := a.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		return fmt.Errorf("failed to send TERM signal: %w", err)
-	}
-
-	if err := a.cmd.Wait(); err != nil {
-		if err.Error() == "signal: terminated" {
-			return nil
-		}
-		return err
-	}
-
-	return nil
-}
-
-func (a *AMInstance) Restart() error {
-	if err := a.Stop(); err != nil {
-		return err
-	}
-	return a.Start()
-}
-
-func (a *AMInstance) Logs() string {
-	return a.out.String()
-}
-
-func (a *AMInstance) Health() error {
-	if err := httpc.New("GET", a.Endpoint+"-/healthy").RetryBackOff(retryIntervals).Run(); err != nil {
-		return fmt.Errorf("failed to get health: %v", err)
-	}
-	return nil
-}
-
-func (a *AMInstance) Ready() error {
-	if err := httpc.New("GET", a.Endpoint+"-/ready").RetryBackOff(retryIntervals).Run(); err != nil {
-		return fmt.Errorf("failed to get health: %v", err)
-	}
-	return nil
-}
-
-func (a *AMInstance) GossipSettled() bool {
-	return strings.Contains(a.out.String(), "gossip settled; proceeding")
-}
-
-func (a *AMInstance) SendAlert(alert types.Alert) error {
-	return httpc.New("POST", a.Endpoint+"api/v2/alerts").RetryBackOff(retryIntervals).EncodeJSON([]*types.Alert{
-		&alert,
-	}).Run()
-}
-
-func (a *AMInstance) GetAlerts() ([]types.Alert, error) {
-	var alerts []types.Alert
-	if err := httpc.New("GET", a.Endpoint+"api/v2/alerts").RetryBackOff(retryIntervals).ParseJSON(&alerts).Run(); err != nil {
-		return nil, fmt.Errorf("failed to get alerts: %v", err)
-	}
-	return alerts, nil
-}
-
 // prepareConfig reads the embedded config file and writes it to the specified directory
 func prepareConfig(dir string) error {
 	// Read the config file from embedded filesystem
@@ -279,20 +154,14 @@ func prepareConfig(dir string) error {
 	return nil
 }
 
-// Call:
-// /bin/alertmanager --config.file=/etc/alertmanager/config_out/alertmanager.env.yaml --storage.path=/alertmanager --data.retention=2160h --cluster.listen-address=[10.32.16.96]:9094 --web.listen-address=:9093 --web.external-url=https://alertmgr.osdp.open.ch --web.route-prefix=/ --cluster.pushpull-interval=5s --cluster.peer=alertmanager-osdp-monitoring-alertmanager-0.alertmanager-operated:9094 --cluster.peer=alertmanager-osdp-monitoring-alertmanager-1.alertmanager-operated:9094 --cluster.peer=alertmanager-osdp-monitoring-alertmanager-2.alertmanager-operated:9094 --cluster.reconnect-timeout=5m --web.config.file=/etc/alertmanager/web_config/web-config.yaml
-func getArgs(tempDir string, nInstances, id int) (string, []string) {
-	args := []string{
-		"--data.retention=1h",
-		"--web.route-prefix=/",
-		"--cluster.pushpull-interval=5s",
-		"--cluster.reconnect-timeout=15s",
+func constructArgs(tempDir string, nInstances, id int) (string, []string) {
+	args := append(baseAMArgs, []string{
 		"--config.file=" + tempDir + "/alertmanager.env.yaml",
 		fmt.Sprintf("--cluster.listen-address=[127.0.0.1]:%d", 9094+id),
 		fmt.Sprintf("--web.listen-address=[127.0.0.1]:%d", 19093+id),
 		fmt.Sprintf("--storage.path=%s/alertmanager_%d", tempDir, id),
-	}
-	for i := 0; i < nInstances; i++ {
+	}...)
+	for i := range nInstances {
 		args = append(args, fmt.Sprintf("--cluster.peer=127.0.0.1:%d", 9094+i))
 	}
 

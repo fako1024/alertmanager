@@ -1,2 +1,4 @@
+alertmanager
+
 !*.yaml
 !testdata
