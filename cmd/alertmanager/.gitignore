@@ -1,4 +1,6 @@
 alertmanager
+alertmanager.test
+*.log
 
 !*.yaml
 !testdata

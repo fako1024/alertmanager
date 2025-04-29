@@ -1,10 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"sync/atomic"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/prometheus/alertmanager/types"
 )
 
@@ -34,7 +34,7 @@ func (wc *webhookConsumer) ListenAndServe(endpoint string) error {
 	// Start a simple HTTP server to handle incoming webhook requests
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		var alerts ReceivedAlerts
-		if json.NewDecoder(r.Body).Decode(&alerts) != nil {
+		if jsoniter.NewDecoder(r.Body).Decode(&alerts) != nil {
 			http.Error(w, "failed to decode JSON", http.StatusBadRequest)
 			return
 		}

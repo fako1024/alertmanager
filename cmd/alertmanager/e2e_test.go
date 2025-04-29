@@ -4,12 +4,13 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/els0r/telemetry/logging"
-	"github.com/fako1024/httpc"
+	"github.com/fako1024/fhttpc"
 	"github.com/prometheus/alertmanager/types"
 	"github.com/prometheus/common/model"
 )
@@ -20,6 +21,7 @@ var testdataFS embed.FS
 const (
 	nInstances         = 3
 	nAlerts            = 5000
+	nRestarts          = 3
 	statusInfoInterval = 5 * time.Second
 
 	binary = "./alertmanager"
@@ -27,7 +29,7 @@ const (
 
 var (
 	log            *logging.L
-	retryIntervals = httpc.Intervals{100 * time.Millisecond, 500 * time.Millisecond, time.Second}
+	retryIntervals = fhttpc.Intervals{100 * time.Millisecond, 500 * time.Millisecond, time.Second}
 
 	// PROD:
 	// --config.file=/etc/alertmanager/config_out/alertmanager.env.yaml --storage.path=/alertmanager --data.retention=2160h
@@ -79,7 +81,7 @@ func TestAlertSequence(t *testing.T) {
 			healthy, ready := ams.Health() == nil, ams.Ready() == nil
 			alerts, err := ams[0].GetAlerts()
 			if err != nil {
-				log.Errorf("error getting alerts: %v", err)
+				log.Warnf("error getting alerts: %v", err)
 			}
 			log.Infof("received %d alerts, %d notifications so far (healthy: %v, ready: %v)", len(alerts), webhookConsumer.GetNNotifications(), healthy, ready)
 		}
@@ -118,17 +120,17 @@ func TestAlertSequence(t *testing.T) {
 		if err != nil {
 			log.Errorf("error getting alerts: %v", err)
 		}
-		if len(alerts) == int(webhookConsumer.GetNNotifications()) {
-			log.Info("alerts/ notifications equalized, continuing...")
+		nNotifications := webhookConsumer.GetNNotifications()
+		if uint64(len(alerts)) == nNotifications {
+			log.Infof("alerts / notifications equalized (%d/%d), continuing...", len(alerts), nNotifications)
 			break
 		}
 	}
 
-	log.Info("restarting Alertmanager instances...")
-
-	for range 10 {
+	for i := range nRestarts {
+		log.Infof("restarting Alertmanager instances (iteration %d/%d)...", i+1, nRestarts)
 		wg := &sync.WaitGroup{}
-		for k := range 3 {
+		for k := range nInstances {
 			wg.Add(1)
 			go func(j int) {
 				if err := ams[j].Restart(); err != nil {
@@ -141,11 +143,18 @@ func TestAlertSequence(t *testing.T) {
 
 		// Wait until all instances are ready / healthy again
 		ams.WaitReadyAndHealthy()
+
+		// Wait a moment to see if any notifications are re-sent after  the restart
+		time.Sleep(30 * time.Second)
 	}
 
 	err = ams.Stop()
 	if err != nil {
 		t.Fatalf("failed to stop Alertmanager instances: %v", err)
+	}
+
+	for i := range nInstances {
+		_ = os.WriteFile(fmt.Sprintf("./am%d.log", i), []byte(ams[i].Logs()), 0600)
 	}
 }
 
@@ -156,7 +165,7 @@ func prepareConfig(dir string) error {
 		return fmt.Errorf("failed to read embedded config file: %w", err)
 	}
 
-	if err := os.WriteFile(dir+"/alertmanager.env.yaml", cfgData, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "alertmanager.env.yaml"), cfgData, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 

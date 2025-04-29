@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fako1024/httpc"
+	"github.com/fako1024/fhttpc"
 	"github.com/prometheus/alertmanager/types"
 )
 
@@ -110,7 +110,9 @@ func (a *AMInstance) Stop() error {
 
 func (a *AMInstance) Restart() error {
 	// TODO Make this shiny again (track error return code for acceptable values)
-	a.Stop()
+	if err := a.Stop(); err != nil {
+		return fmt.Errorf("failed to stop command: %w", err)
+	}
 	return a.Start()
 }
 
@@ -119,7 +121,7 @@ func (a *AMInstance) Logs() string {
 }
 
 func (a *AMInstance) Health() error {
-	if err := httpc.New("GET", a.Endpoint+"-/healthy").RetryBackOff(retryIntervals).Run(); err != nil {
+	if err := fhttpc.New("GET", a.Endpoint+"-/healthy").RetryBackOff(retryIntervals).Run(); err != nil {
 		return fmt.Errorf("failed to get health: %v", err)
 	}
 	return nil
@@ -136,7 +138,7 @@ func (a *AMInstance) WaitReadyAndHealthy() {
 }
 
 func (a *AMInstance) Ready() error {
-	if err := httpc.New("GET", a.Endpoint+"-/ready").
+	if err := fhttpc.New("GET", a.Endpoint+"-/ready").
 		RetryBackOff(retryIntervals).Run(); err != nil {
 		return fmt.Errorf("failed to get health: %v", err)
 	}
@@ -148,7 +150,7 @@ func (a *AMInstance) GossipSettled() bool {
 }
 
 func (a *AMInstance) SendAlert(alert types.Alert) error {
-	return httpc.New("POST", a.Endpoint+"api/v2/alerts").
+	return fhttpc.New("POST", a.Endpoint+"api/v2/alerts").
 		RetryBackOff(retryIntervals).EncodeJSON([]*types.Alert{
 		&alert,
 	}).Run()
@@ -156,9 +158,9 @@ func (a *AMInstance) SendAlert(alert types.Alert) error {
 
 func (a *AMInstance) GetAlerts() ([]types.Alert, error) {
 	var alerts []types.Alert
-	if err := httpc.New("GET", a.Endpoint+"api/v2/alerts").
+	if err := fhttpc.New("GET", a.Endpoint+"api/v2/alerts").
 		RetryBackOff(retryIntervals).ParseJSON(&alerts).Run(); err != nil {
-		return nil, fmt.Errorf("failed to get alerts: %v", err)
+		return nil, fmt.Errorf("failed to get alerts: %w", err)
 	}
 	return alerts, nil
 }
