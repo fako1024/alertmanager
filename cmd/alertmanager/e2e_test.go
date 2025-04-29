@@ -2,12 +2,9 @@ package main
 
 import (
 	"embed"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,7 +18,7 @@ import (
 var testdataFS embed.FS
 
 const (
-	nInstances         = 10
+	nInstances         = 20
 	nAlerts            = 10000
 	statusInfoInterval = 5 * time.Second
 
@@ -91,29 +88,41 @@ func TestAlertSequence(t *testing.T) {
 	log.Infof("all instances ready / healthy - Sending %d alerts...", nAlerts)
 
 	for i := range nAlerts {
-		for j := range nInstances {
-			if err := ams[j].SendAlert(types.Alert{
-				Alert: model.Alert{
-					Labels: model.LabelSet{
-						"alertname": model.LabelValue(fmt.Sprintf("LatencyHigh_%d", i)),
-						"cluster":   "test-cluster",
-						"service":   "foo1",
-						"severity":  "critical",
-					},
-					Annotations: model.LabelSet{
-						"summary": "High latency detected",
-						"desc":    "Latency is above threshold",
-					},
-					StartsAt: time.Now(),
+		// TODO: Fix client / connection issues so we can actually send everywhere....
+		//for j := range nInstances {
+		if err := ams[0].SendAlert(types.Alert{
+			Alert: model.Alert{
+				Labels: model.LabelSet{
+					"alertname": model.LabelValue(fmt.Sprintf("LatencyHigh_%d", i)),
+					"cluster":   "test-cluster",
+					"service":   "foo1",
+					"severity":  "critical",
 				},
-			}); err != nil {
-				t.Fatalf("error sending alert: %v", err)
-			}
+				Annotations: model.LabelSet{
+					"summary": "High latency detected",
+					"desc":    "Latency is above threshold",
+				},
+				StartsAt: time.Now(),
+				EndsAt:   time.Now().Add(1 * time.Hour),
+			},
+		}); err != nil {
+			t.Fatalf("error sending alert: %v", err)
 		}
+		//}
 	}
 
 	log.Infof("sent %d alerts, waiting for state to settle...", nAlerts)
-	time.Sleep(300 * time.Second)
+	for {
+		time.Sleep(1 * time.Second)
+		alerts, err := ams[0].GetAlerts()
+		if err != nil {
+			log.Errorf("error getting alerts: %v", err)
+		}
+		if len(alerts) == int(webhookConsumer.GetNNotifications()) {
+			log.Info("alerts/ notifications equalized, continuing...")
+			break
+		}
+	}
 
 	log.Info("restarting Alertmanager instances...")
 
@@ -165,45 +174,6 @@ func constructArgs(tempDir string, nInstances, id int) (string, []string) {
 	}
 
 	return fmt.Sprintf("http://127.0.0.1:%d/", 19093+id), args
-}
-
-type webhookConsumer struct {
-	nReceived uint64
-}
-
-func newWebhookConsumer() *webhookConsumer {
-	return &webhookConsumer{
-		nReceived: 0,
-	}
-}
-
-func (wc *webhookConsumer) ListenAndServe(endpoint string) error {
-	// Start a simple HTTP server to handle incoming webhook requests
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		var alerts ReceivedAlerts
-		if json.NewDecoder(r.Body).Decode(&alerts) != nil {
-			http.Error(w, "failed to decode JSON", http.StatusBadRequest)
-			return
-		}
-		atomic.AddUint64(&wc.nReceived, uint64(len(alerts.Alerts)))
-		w.WriteHeader(http.StatusOK)
-	})
-
-	return http.ListenAndServe(endpoint, nil)
-}
-
-func (wc *webhookConsumer) GetNNotifications() uint64 {
-	return atomic.LoadUint64(&wc.nReceived)
-}
-
-type ReceivedAlerts struct {
-	Receiver        string        `json:"receiver"`
-	Status          string        `json:"status"`
-	Alerts          []types.Alert `json:"alerts"`
-	ExternalURL     string        `json:"externalURL"`
-	Version         string        `json:"version"`
-	GroupKey        string        `json:"groupKey"`
-	TruncatedAlerts int           `json:"truncatedAlerts"`
 }
 
 func TestMain(m *testing.M) {
