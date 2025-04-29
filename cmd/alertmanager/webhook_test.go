@@ -29,6 +29,8 @@ func newWebhookConsumer() *webhookConsumer {
 }
 
 func (wc *webhookConsumer) ListenAndServe(endpoint string) error {
+	// TODO: Add artifical reception delay to simulate network latency
+
 	// Start a simple HTTP server to handle incoming webhook requests
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		var alerts ReceivedAlerts

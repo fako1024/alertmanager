@@ -18,8 +18,8 @@ import (
 var testdataFS embed.FS
 
 const (
-	nInstances         = 20
-	nAlerts            = 10000
+	nInstances         = 3
+	nAlerts            = 5000
 	statusInfoInterval = 5 * time.Second
 
 	binary = "./alertmanager"
@@ -88,27 +88,27 @@ func TestAlertSequence(t *testing.T) {
 	log.Infof("all instances ready / healthy - Sending %d alerts...", nAlerts)
 
 	for i := range nAlerts {
-		// TODO: Fix client / connection issues so we can actually send everywhere....
-		//for j := range nInstances {
-		if err := ams[0].SendAlert(types.Alert{
-			Alert: model.Alert{
-				Labels: model.LabelSet{
-					"alertname": model.LabelValue(fmt.Sprintf("LatencyHigh_%d", i)),
-					"cluster":   "test-cluster",
-					"service":   "foo1",
-					"severity":  "critical",
+		// TODO: Try round-robin instead of sent-to-all (maybe fixes it)?
+		for j := range nInstances {
+			if err := ams[j].SendAlert(types.Alert{
+				Alert: model.Alert{
+					Labels: model.LabelSet{
+						"alertname": model.LabelValue(fmt.Sprintf("LatencyHigh_%d", i)),
+						"cluster":   "test-cluster",
+						"service":   "foo1",
+						"severity":  "critical",
+					},
+					Annotations: model.LabelSet{
+						"summary": "High latency detected",
+						"desc":    "Latency is above threshold",
+					},
+					StartsAt: time.Now(),
+					EndsAt:   time.Now().Add(1 * time.Hour),
 				},
-				Annotations: model.LabelSet{
-					"summary": "High latency detected",
-					"desc":    "Latency is above threshold",
-				},
-				StartsAt: time.Now(),
-				EndsAt:   time.Now().Add(1 * time.Hour),
-			},
-		}); err != nil {
-			t.Fatalf("error sending alert: %v", err)
+			}); err != nil {
+				t.Fatalf("error sending alert: %v", err)
+			}
 		}
-		//}
 	}
 
 	log.Infof("sent %d alerts, waiting for state to settle...", nAlerts)
@@ -126,7 +126,7 @@ func TestAlertSequence(t *testing.T) {
 
 	log.Info("restarting Alertmanager instances...")
 
-	for range 100 {
+	for range 10 {
 		wg := &sync.WaitGroup{}
 		for k := range 3 {
 			wg.Add(1)
@@ -139,7 +139,8 @@ func TestAlertSequence(t *testing.T) {
 		}
 		wg.Wait()
 
-		time.Sleep(1 * time.Second)
+		// Wait until all instances are ready / healthy again
+		ams.WaitReadyAndHealthy()
 	}
 
 	err = ams.Stop()

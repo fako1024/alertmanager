@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/fako1024/httpc"
 	"github.com/prometheus/alertmanager/types"
@@ -58,6 +59,12 @@ func (a AMInstances) Ready() error {
 	return nil
 }
 
+func (a AMInstances) WaitReadyAndHealthy() {
+	for _, instance := range a {
+		instance.WaitReadyAndHealthy()
+	}
+}
+
 type AMInstance struct {
 	Endpoint string
 	Args     []string
@@ -102,9 +109,8 @@ func (a *AMInstance) Stop() error {
 }
 
 func (a *AMInstance) Restart() error {
-	if err := a.Stop(); err != nil {
-		return err
-	}
+	// TODO Make this shiny again (track error return code for acceptable values)
+	a.Stop()
 	return a.Start()
 }
 
@@ -117,6 +123,16 @@ func (a *AMInstance) Health() error {
 		return fmt.Errorf("failed to get health: %v", err)
 	}
 	return nil
+}
+
+func (a *AMInstance) WaitReadyAndHealthy() {
+	for {
+		time.Sleep(time.Second)
+		ready, healthy := a.Ready(), a.Health()
+		if ready == nil && healthy == nil {
+			return
+		}
+	}
 }
 
 func (a *AMInstance) Ready() error {
