@@ -48,11 +48,11 @@ var (
 
 func TestAlertSequence(t *testing.T) {
 
-	log.Infof("Starting %d Alertmanager instances, waiting for gossip to settle...", nInstances)
+	log.Infof("starting %d Alertmanager instances, waiting for gossip to settle...", nInstances)
 
 	tempDir := t.TempDir()
 	if err := prepareConfig(tempDir); err != nil {
-		t.Fatalf("Failed to prepare config: %v", err)
+		t.Fatalf("failed to prepare config: %v", err)
 	}
 
 	webhookConsumer := newWebhookConsumer()
@@ -65,7 +65,7 @@ func TestAlertSequence(t *testing.T) {
 
 	err := ams.Start()
 	if err != nil {
-		t.Fatalf("Failed to start Alertmanager instances: %v", err)
+		t.Fatalf("failed to start Alertmanager instances: %v", err)
 	}
 
 	for {
@@ -82,13 +82,13 @@ func TestAlertSequence(t *testing.T) {
 			healthy, ready := ams.Health() == nil, ams.Ready() == nil
 			alerts, err := ams[0].GetAlerts()
 			if err != nil {
-				log.Errorf("Error getting alerts: %v", err)
+				log.Errorf("error getting alerts: %v", err)
 			}
-			log.Infof("Received %d alerts, %d notifications so far (healthy: %v, ready: %v)", len(alerts), webhookConsumer.GetNNotifications(), healthy, ready)
+			log.Infof("received %d alerts, %d notifications so far (healthy: %v, ready: %v)", len(alerts), webhookConsumer.GetNNotifications(), healthy, ready)
 		}
 	}()
 
-	log.Infof("All instances ready / healthy - Sending %d alerts...", nAlerts)
+	log.Infof("all instances ready / healthy - Sending %d alerts...", nAlerts)
 
 	for i := range nAlerts {
 		for j := range nInstances {
@@ -107,15 +107,15 @@ func TestAlertSequence(t *testing.T) {
 					StartsAt: time.Now(),
 				},
 			}); err != nil {
-				t.Fatalf("Error sending alert: %v", err)
+				t.Fatalf("error sending alert: %v", err)
 			}
 		}
 	}
 
-	log.Infof("Sent %d alerts, waiting for state to settle...", nAlerts)
+	log.Infof("sent %d alerts, waiting for state to settle...", nAlerts)
 	time.Sleep(300 * time.Second)
 
-	log.Info("Restarting Alertmanager instances...")
+	log.Info("restarting Alertmanager instances...")
 
 	for range 100 {
 		wg := &sync.WaitGroup{}
@@ -123,7 +123,7 @@ func TestAlertSequence(t *testing.T) {
 			wg.Add(1)
 			go func(j int) {
 				if err := ams[j].Restart(); err != nil {
-					log.Errorf("Error restarting Alertmanager instance: %v", err)
+					log.Errorf("error restarting Alertmanager instance: %v", err)
 				}
 				wg.Done()
 			}(k)
@@ -135,20 +135,19 @@ func TestAlertSequence(t *testing.T) {
 
 	err = ams.Stop()
 	if err != nil {
-		t.Fatalf("Failed to stop Alertmanager instances: %v", err)
+		t.Fatalf("failed to stop Alertmanager instances: %v", err)
 	}
 }
 
-// prepareConfig reads the embedded config file and writes it to the specified directory
 func prepareConfig(dir string) error {
 	// Read the config file from embedded filesystem
 	cfgData, err := testdataFS.ReadFile("testdata/alertmanager.test.yaml")
 	if err != nil {
-		return fmt.Errorf("failed to read embedded config file: %v", err)
+		return fmt.Errorf("failed to read embedded config file: %w", err)
 	}
 
-	if err := os.WriteFile(dir+"/alertmanager.env.yaml", cfgData, 0644); err != nil {
-		return fmt.Errorf("failed to write config file: %v", err)
+	if err := os.WriteFile(dir+"/alertmanager.env.yaml", cfgData, 0600); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	return nil
@@ -183,7 +182,7 @@ func (wc *webhookConsumer) ListenAndServe(endpoint string) error {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		var alerts ReceivedAlerts
 		if json.NewDecoder(r.Body).Decode(&alerts) != nil {
-			http.Error(w, "Failed to decode JSON", http.StatusBadRequest)
+			http.Error(w, "failed to decode JSON", http.StatusBadRequest)
 			return
 		}
 		atomic.AddUint64(&wc.nReceived, uint64(len(alerts.Alerts)))
@@ -214,7 +213,7 @@ func TestMain(m *testing.M) {
 		logging.EncodingLogfmt,
 	)
 	if err != nil {
-		fmt.Printf("Error initializing logger: %v\n", err)
+		fmt.Printf("error initializing logger: %v\n", err)
 		os.Exit(1)
 	}
 	os.Exit(m.Run())

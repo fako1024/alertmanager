@@ -120,7 +120,8 @@ func (a *AMInstance) Health() error {
 }
 
 func (a *AMInstance) Ready() error {
-	if err := httpc.New("GET", a.Endpoint+"-/ready").RetryBackOff(retryIntervals).Run(); err != nil {
+	if err := httpc.New("GET", a.Endpoint+"-/ready").
+		RetryBackOff(retryIntervals).Run(); err != nil {
 		return fmt.Errorf("failed to get health: %v", err)
 	}
 	return nil
@@ -131,14 +132,16 @@ func (a *AMInstance) GossipSettled() bool {
 }
 
 func (a *AMInstance) SendAlert(alert types.Alert) error {
-	return httpc.New("POST", a.Endpoint+"api/v2/alerts").RetryBackOff(retryIntervals).EncodeJSON([]*types.Alert{
+	return httpc.New("POST", a.Endpoint+"api/v2/alerts").
+		RetryBackOff(retryIntervals).EncodeJSON([]*types.Alert{
 		&alert,
 	}).Run()
 }
 
 func (a *AMInstance) GetAlerts() ([]types.Alert, error) {
 	var alerts []types.Alert
-	if err := httpc.New("GET", a.Endpoint+"api/v2/alerts").RetryBackOff(retryIntervals).ParseJSON(&alerts).Run(); err != nil {
+	if err := httpc.New("GET", a.Endpoint+"api/v2/alerts").
+		RetryBackOff(retryIntervals).ParseJSON(&alerts).Run(); err != nil {
 		return nil, fmt.Errorf("failed to get alerts: %v", err)
 	}
 	return alerts, nil
