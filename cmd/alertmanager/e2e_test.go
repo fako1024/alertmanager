@@ -74,55 +74,22 @@ func TestAlertSequence(t *testing.T) {
 			break
 		}
 	}
-
-	go func() {
-		for {
-			time.Sleep(statusInfoInterval)
-			healthy, ready := ams.Health() == nil, ams.Ready() == nil
-			alerts, err := ams[0].GetAlerts()
-			if err != nil {
-				log.Warnf("error getting alerts: %v", err)
-			}
-			log.Infof("received %d alerts, %d notifications so far (healthy: %v, ready: %v)", len(alerts), webhookConsumer.GetNNotifications(), healthy, ready)
-		}
-	}()
-
 	log.Infof("all instances ready / healthy - Sending %d alerts...", nAlerts)
+	go trackAMs(ams, webhookConsumer)
 
-	for i := range nAlerts {
-		// TODO: Try round-robin instead of sent-to-all (maybe fixes it)?
-		for j := range nInstances {
-			if err := ams[j].SendAlert(types.Alert{
-				Alert: model.Alert{
-					Labels: model.LabelSet{
-						"alertname": model.LabelValue(fmt.Sprintf("LatencyHigh_%d", i)),
-						"cluster":   "test-cluster",
-						"service":   "foo1",
-						"severity":  "critical",
-					},
-					Annotations: model.LabelSet{
-						"summary": "High latency detected",
-						"desc":    "Latency is above threshold",
-					},
-					StartsAt: time.Now(),
-					EndsAt:   time.Now().Add(1 * time.Hour),
-				},
-			}); err != nil {
-				t.Fatalf("error sending alert: %v", err)
-			}
-		}
-	}
+	///////////////////////////////////////////////////////////////////////////////////////////////////
+	// Choose your preferred method of sending alerts:
+	sendAlertsAllInstances(t, ams, nAlerts) // default / recommended method
+	// sendAlertsSingleInstance(t, ams[0], nAlerts)
+	// sendAlertsSingleInstanceRR(t, ams, nAlerts)
+	//////////////////////////////////////////////////////////////////////////////////////////////////
 
 	log.Infof("sent %d alerts, waiting for state to settle...", nAlerts)
 	for {
 		time.Sleep(1 * time.Second)
-		alerts, err := ams[0].GetAlerts()
-		if err != nil {
-			log.Errorf("error getting alerts: %v", err)
-		}
 		nNotifications := webhookConsumer.GetNNotifications()
-		if uint64(len(alerts)) == nNotifications {
-			log.Infof("alerts / notifications equalized (%d/%d), continuing...", len(alerts), nNotifications)
+		if nAlerts == nNotifications {
+			log.Infof("alerts / notifications equalized (%d/%d), continuing...", nAlerts, nNotifications)
 			break
 		}
 	}
@@ -155,6 +122,115 @@ func TestAlertSequence(t *testing.T) {
 
 	for i := range nInstances {
 		_ = os.WriteFile(fmt.Sprintf("./am%d.log", i), []byte(ams[i].Logs()), 0600)
+	}
+}
+
+func sendAlertsSingleInstance(t *testing.T, am *AMInstance, nAlerts int) int {
+	for i := range nAlerts {
+		if err := am.SendAlert(types.Alert{
+			Alert: model.Alert{
+				Labels: model.LabelSet{
+					"alertname": model.LabelValue(fmt.Sprintf("LatencyHigh_%d", i)),
+					"cluster":   "test-cluster",
+					"service":   "foo1",
+					"severity":  "critical",
+				},
+				Annotations: model.LabelSet{
+					"summary": "High latency detected",
+					"desc":    "Latency is above threshold",
+				},
+				StartsAt: time.Now(),
+				EndsAt:   time.Now().Add(1 * time.Hour),
+			},
+		}); err != nil {
+			t.Fatalf("error sending alert: %v", err)
+		}
+	}
+
+	return nAlerts
+}
+
+func sendAlertsAllInstances(t *testing.T, ams AMInstances, nAlerts int) int {
+	for i := range nAlerts {
+		for j := range nInstances {
+			if err := ams[j].SendAlert(types.Alert{
+				Alert: model.Alert{
+					Labels: model.LabelSet{
+						"alertname": model.LabelValue(fmt.Sprintf("LatencyHigh_%d", i)),
+						"cluster":   "test-cluster",
+						"service":   "foo1",
+						"severity":  "critical",
+					},
+					Annotations: model.LabelSet{
+						"summary": "High latency detected",
+						"desc":    "Latency is above threshold",
+					},
+					StartsAt: time.Now(),
+					EndsAt:   time.Now().Add(1 * time.Hour),
+				},
+			}); err != nil {
+				t.Fatalf("error sending alert: %v", err)
+			}
+		}
+	}
+
+	return nAlerts
+}
+
+func sendAlertsSingleInstanceRR(t *testing.T, ams AMInstances, nAlerts int) int {
+	nExpected := 0
+	for i := range nAlerts {
+		j1, j2 := i%nInstances, (i+1)%nInstances
+		for _, j := range []int{j1, j2} {
+			if j == 0 {
+				nExpected++
+			}
+			if err := ams[j].SendAlert(types.Alert{
+				Alert: model.Alert{
+					Labels: model.LabelSet{
+						"alertname": model.LabelValue(fmt.Sprintf("LatencyHigh_%d", i)),
+						"cluster":   "test-cluster",
+						"service":   "foo1",
+						"severity":  "critical",
+					},
+					Annotations: model.LabelSet{
+						"summary": "High latency detected",
+						"desc":    "Latency is above threshold",
+					},
+					StartsAt: time.Now(),
+					EndsAt:   time.Now().Add(1 * time.Hour),
+				},
+			}); err != nil {
+				t.Fatalf("error sending alert: %v", err)
+			}
+		}
+	}
+
+	return nExpected
+}
+
+func trackAMs(ams AMInstances, wc *webhookConsumer) {
+	curAlerts := make([]int, nInstances)
+	for {
+		time.Sleep(statusInfoInterval)
+
+		healthy, ready := ams.Health() == nil, ams.Ready() == nil
+		if !healthy || !ready {
+			log.Warnf("alertmanager instances not healthy or ready (healthy: %v, ready: %v)", healthy, ready)
+			continue
+		}
+
+		for i := range nInstances {
+			curAlerts[i] = -1
+			alerts, err := ams[i].GetAlerts()
+			if err != nil {
+				log.Warnf("error getting alerts for instance %d: %v", i, err)
+				continue
+			}
+			curAlerts[i] = len(alerts)
+		}
+
+		log.Infof("alerts per AM: %v, %d notifications so far", curAlerts, wc.GetNNotifications())
 	}
 }
 
